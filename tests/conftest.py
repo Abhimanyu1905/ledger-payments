@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -12,42 +13,9 @@ from testcontainers.community.postgres import PostgresContainer
 
 from app.app import create_app
 
-_ALEMBIC_INI_BACKUP = None
-
-
-@pytest.fixture(scope="session", autouse=True)
-def patch_alembic_ini_for_test_db(database_url):
-    """Override alembic.ini sqlalchemy.url to point at the test container."""
-    global _ALEMBIC_INI_BACKUP
-    ini_path = os.path.join(os.path.dirname(__file__), "..", "alembic.ini")
-    with open(ini_path) as f:
-        _ALEMBIC_INI_BACKUP = f.read()
-    patched = _ALEMBIC_INI_BACKUP.replace(
-        "sqlalchemy.url = postgresql://ledger:ledger@localhost:5433/ledger",
-        f"sqlalchemy.url = {database_url}",
-    )
-    with open(ini_path, "w") as f:
-        f.write(patched)
-    yield
-    # Restore original
-    with open(ini_path, "w") as f:
-        f.write(_ALEMBIC_INI_BACKUP)
-    _ALEMBIC_INI_BACKUP = None
-
-
-@pytest.fixture(scope="session", autouse=True)
-def run_migrations_on_test_db(postgres_container, database_url):
-    """Run alembic migrations against the test database before any tests."""
-    result = subprocess.run(
-        ["python", "-m", "alembic", "upgrade", "head"],
-        capture_output=True,
-        text=True,
-        cwd=os.path.join(os.path.dirname(__file__), ".."),
-        env={**os.environ, "DATABASE_URL": database_url},
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Alembic migration failed:\n{result.stderr}")
-    yield
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_ALEMBIC_INI = os.path.join(_ROOT, "alembic.ini")
+_ALEMBIC_INI_BACKUP: str | None = None
 
 
 @pytest.fixture(scope="session")
@@ -64,17 +32,43 @@ def postgres_container():
 
 @pytest.fixture(scope="session")
 def database_url(postgres_container):
-    """Generate database URL from container."""
+    """Generate database URL from container (psycopg3-compatible)."""
     url = postgres_container.get_connection_url()
-    # Convert postgresql+psycopg2:// to postgresql:// for psycopg3
     return url.replace("postgresql+psycopg2://", "postgresql://")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def run_migrations_on_test_db(database_url):
+    """Patch alembic.ini URL, run migrations, then restore."""
+    global _ALEMBIC_INI_BACKUP
+    with open(_ALEMBIC_INI) as f:
+        _ALEMBIC_INI_BACKUP = f.read()
+    patched = _ALEMBIC_INI_BACKUP.replace(
+        "sqlalchemy.url = postgresql://ledger:ledger@localhost:5433/ledger",
+        f"sqlalchemy.url = {database_url}",
+    )
+    with open(_ALEMBIC_INI, "w") as f:
+        f.write(patched)
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            capture_output=True,
+            text=True,
+            cwd=_ROOT,
+            env={**os.environ, "DATABASE_URL": database_url},
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Alembic migration failed:\n{result.stderr}")
+        yield
+    finally:
+        with open(_ALEMBIC_INI, "w") as f:
+            f.write(_ALEMBIC_INI_BACKUP)
+        _ALEMBIC_INI_BACKUP = None
 
 
 @pytest.fixture(scope="session")
 def app(database_url):
     """Create FastAPI app with test database URL."""
-    import os
-
     os.environ["DATABASE_URL"] = database_url
 
     from app.config import settings
