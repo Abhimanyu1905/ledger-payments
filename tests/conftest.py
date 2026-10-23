@@ -16,6 +16,7 @@ from app.app import create_app
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _ALEMBIC_INI = os.path.join(_ROOT, "alembic.ini")
 _ALEMBIC_INI_BACKUP: str | None = None
+_MIGRATIONS_RUN = False
 
 
 @pytest.fixture(scope="session")
@@ -40,7 +41,7 @@ def database_url(postgres_container):
 @pytest.fixture(scope="session", autouse=True)
 def run_migrations_on_test_db(database_url):
     """Patch alembic.ini URL, run migrations, then restore."""
-    global _ALEMBIC_INI_BACKUP
+    global _ALEMBIC_INI_BACKUP, _MIGRATIONS_RUN
     with open(_ALEMBIC_INI) as f:
         _ALEMBIC_INI_BACKUP = f.read()
     patched = _ALEMBIC_INI_BACKUP.replace(
@@ -59,11 +60,13 @@ def run_migrations_on_test_db(database_url):
         )
         if result.returncode != 0:
             raise RuntimeError(f"Alembic migration failed:\n{result.stderr}")
+        _MIGRATIONS_RUN = True
         yield
     finally:
         with open(_ALEMBIC_INI, "w") as f:
             f.write(_ALEMBIC_INI_BACKUP)
         _ALEMBIC_INI_BACKUP = None
+        _MIGRATIONS_RUN = None
 
 
 @pytest.fixture(scope="session")

@@ -9,6 +9,21 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ledger
+          POSTGRES_PASSWORD: ledger
+          POSTGRES_DB: ledger
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -25,5 +40,12 @@ jobs:
       - name: Run linter
         run: ruff check .
 
+      - name: Run migrations
+        env:
+          DATABASE_URL: postgresql://ledger:ledger@localhost:5433/ledger
+        run: python -m alembic upgrade head
+
       - name: Run tests
+        env:
+          DATABASE_URL: postgresql://ledger:ledger@localhost:5433/ledger
         run: pytest -v
